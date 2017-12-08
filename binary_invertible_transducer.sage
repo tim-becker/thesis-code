@@ -190,7 +190,7 @@ class BinaryInvertibleTransducer(object):
         """
         Return the gap value of an odd state in `self`
         """
-        for s, ((d0, d1), toggle) in T.data.items():
+        for s, ((d0, d1), toggle) in self.data.items():
             if toggle:
                 return d0*d1^(-1)
 
@@ -247,7 +247,7 @@ class BinaryInvertibleTransducer(object):
 
         return identities
 
-    def estimate_group(self, max_len=4):
+    def estimate_group(self, max_len=6):
         """
         Estimates the transduction group for `self`
         """
