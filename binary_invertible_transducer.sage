@@ -349,7 +349,7 @@ class BinaryInvertibleTransducer(object):
         and 'z' is not included as a variable in the ring.
         """
         assert self.is_free_abelian(), "Transducer must be free abelian"
-        var = {k: 'x%d' % i for i, k in enumerate(self.data.keys())}
+        var = {k: "y%d" % i for i, k in enumerate(self.data.keys())}
         if z is None:
             R = PolynomialRing(QQ, self.n + 1, var.values() + ['z'])
             z = R('z')
@@ -365,7 +365,8 @@ class BinaryInvertibleTransducer(object):
             else:
                 polys.append(var[k] * z - var[d0])
 
-        return Ideal(polys)
+        varinv = {v:k for k,v in var.items()}
+        return Ideal(polys), varinv
 
     def field_representation(self):
         """
@@ -375,13 +376,15 @@ class BinaryInvertibleTransducer(object):
         Returns a tuple (F, S) where F is the base field and S is a dictionary
         mapping self.states() to elements of F
         """
-        I = self._ideal()
+        I, varinv = self._ideal()
         T = I.triangular_decomposition()[0]
         chi = T.gens()[0].univariate_polynomial()
         F = NumberField(chi, 'Z')
-        solutions = self._ideal(z=F('Z')).variety()
+        I, varinv = self._ideal(z=F('Z'))
+        solutions = I.variety()
         assert len(solutions) == 1
-        return F, solutions[0]
+        solution = {varinv[v]: s for v,s in solutions[0].items()}
+        return F, solution
 
     def digraph(self):
         """
