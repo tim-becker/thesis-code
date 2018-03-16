@@ -4,7 +4,7 @@ Code implementing Binary Invertible Transducers.
 Includes code to compute useful representations of Abelian transducers.
 """
 from collections import deque
-from copy import copy, deepcopy
+from sage.all import cached_method
 import itertools
 import operator
 
@@ -23,7 +23,7 @@ P.<z> = PolynomialRing(QQ)
 # Type of FreeGroupElements; used for assertions
 FreeGroupElement = FreeGroup().gens()[0].__class__
 
-def factor(f):
+def group_factor(f):
     """
     Compute the factorization of a free group element
     """
@@ -34,7 +34,7 @@ def wr(f, A):
     """
     Compute the wreath recursion for the given word `f` in the transducer `A`
     """
-    s = factor(f)
+    s = group_factor(f)
     if len(s) == 0:
         I = A.data.keys()[0].parent(1)
         return (I, I), 0
@@ -81,8 +81,6 @@ class BinaryInvertibleTransducer(object):
                 newdata[gen[k]] = ((gen[d0], gen[d1]), toggle)
         self.base_group = newdata.keys()[0].parent()
         self.data = newdata
-        self.acc_trans = None
-        self.Ai = None
 
     def states(self):
         return self.data.keys()
@@ -109,6 +107,7 @@ class BinaryInvertibleTransducer(object):
             yield y
             _, y = self.transduce(start, y)
 
+    @cached_method
     def transducer(self):
         """
         Creates a sage built-tin Transducer object for this transducer
@@ -120,6 +119,7 @@ class BinaryInvertibleTransducer(object):
         states = self.states()
         return Transducer(edges, initial_states=states, final_states=states)
 
+    @cached_method
     def minimized(self):
         """
         Returns a minimized version of `self`. Prefer the state with the
@@ -147,32 +147,35 @@ class BinaryInvertibleTransducer(object):
             data[rep(s)] = (transition, toggle)
         return BinaryInvertibleTransducer(data)
 
+    @cached_method
+    def _acc_trans(self):
+        acc_trans = [[g, g, i] for i in [(0,0),(0,1),(1,0),(1,1)]]
+        for s, (trans, toggle) in self.data.items():
+            acc_trans.append([s, trans[0], (0, int(toggle))])
+            acc_trans.append([s, trans[1], (1, 1-toggle)])
+            acc_trans.append([s, g, (0, 1-toggle)])
+            acc_trans.append([s, g, (1, int(toggle))])
+        return acc_trans
+
     def acceptor(self, t):
         """
         Computes the acceptor for a state t
         """
         assert t in self.data
         g = 'g'
-        if self.acc_trans is None:
-            self.acc_trans = [[g, g, i] for i in [(0,0),(0,1),(1,0),(1,1)]]
-            for s, (trans, toggle) in self.data.items():
-                self.acc_trans.append([s, trans[0], (0, int(toggle))])
-                self.acc_trans.append([s, trans[1], (1, 1-toggle)])
-                self.acc_trans.append([s, g, (0, 1-toggle)])
-                self.acc_trans.append([s, g, (1, int(toggle))])
-        A = Automaton(self.acc_trans, initial_states=[t],
+        acc_trans = self._acc_trans()
+        A = Automaton(acc_trans, initial_states=[t],
                       final_states=self.states())
         return A.accessible_components()
 
+    @cached_method
     def inverse(self):
-        if not self.Ai:
-            def inv(w):
-                ((d0, d1), t) = w
-                return ((d1^(-1), d0^(-1)), t) if t else \
-                       ((d0^(-1), d1^(-1)), t)
-            data = {s^(-1): inv(w) for s, w in self.data.items()}
-            self.Ai = BinaryInvertibleTransducer(data)
-        return self.Ai
+        def inv(w):
+            ((d0, d1), t) = w
+            return ((d1^(-1), d0^(-1)), t) if t else \
+                   ((d0^(-1), d1^(-1)), t)
+        data = {s^(-1): inv(w) for s, w in self.data.items()}
+        return BinaryInvertibleTransducer(data)
 
     def product(self, other):
         data = {}
@@ -194,8 +197,10 @@ class BinaryInvertibleTransducer(object):
             if toggle:
                 return d0*d1^(-1)
 
+    @cached_method
     def is_free_abelian(self):
         # Free abelian transducers have nontrivial gap value
+        # TODO: Optimize this function
         if self.minimized().gap().is_one():
             return False
         gap_acc = None
@@ -310,23 +315,23 @@ class BinaryInvertibleTransducer(object):
         for k, ((d0, d1), t) in P.data.items():
             if d1.is_one() and not d0.is_one():
                 gamma = d0
-                nu = k
+                delta = k
                 break
         else:
-            assert False, "Couldn't find nu"
+            assert False, "Couldn't find delta"
 
         data = copy(self.data)
         for k, ((d0, d1), t) in self.data.items():
             if t and d0 == state:
-                A = self.subautomaton(k*nu^(2)).merge(self)
-                return A.merge(A.subautomaton(k*nu))
+                A = self.subautomaton(k*delta^(2)).merge(self)
+                return A.merge(A.subautomaton(k*delta))
             elif t and d1 == state:
-                A = self.subautomaton(k*nu^(-2)).merge(self)
-                return A.merge(A.subautomaton(k*nu^(-1)))
+                A = self.subautomaton(k*delta^(-2)).merge(self)
+                return A.merge(A.subautomaton(k*delta^(-1)))
             elif not t and d0 == state:
                 assert d1 == state
-                A = self.subautomaton(k*nu).merge(self)
-                return A.merge(A.subautomaton(k*nu^(-1)))
+                A = self.subautomaton(k*delta).merge(self)
+                return A.merge(A.subautomaton(k*delta^(-1)))
         return BinaryInvertibleTransducer(data)
 
     def grow(self):
@@ -340,7 +345,21 @@ class BinaryInvertibleTransducer(object):
             A = A.merge(self.extend_back(s))
         return A.minimized()
 
-    def _ideal(self, z=None):
+    def transition_matrix(self):
+        """
+        Return the 1/2 transition matrix for the abelian transducer `self`
+        """
+        states = self.states()
+        M = matrix(QQ, self.n, 0)
+        for s in states:
+            (d0, d1), t = self.data[s]
+            col = [0]*self.n
+            col[states.index(d0)] += 1/2
+            col[states.index(d1)] += 1/2
+            M = M.augment(vector(col))
+        return M
+
+    def poly_ideal(self, z=None):
         """
         Computes an ideal of a multivariate polynomial ring whose solutions
         are the field representation of the free abelian machine.
@@ -368,6 +387,7 @@ class BinaryInvertibleTransducer(object):
         varinv = {v:k for k,v in var.items()}
         return Ideal(polys), varinv
 
+    @cached_method
     def field_representation(self):
         """
         Computes the representation of an abelian transducer as elements over
@@ -376,16 +396,44 @@ class BinaryInvertibleTransducer(object):
         Returns a tuple (F, S) where F is the base field and S is a dictionary
         mapping self.states() to elements of F
         """
-        I, varinv = self._ideal()
+        I, varinv = self.poly_ideal()
         T = I.triangular_decomposition()[0]
         chi = T.gens()[0].univariate_polynomial()
         F = NumberField(chi, 'Z')
-        I, varinv = self._ideal(z=F('Z'))
+        I, varinv = self.poly_ideal(z=F('Z'))
         solutions = I.variety()
         assert len(solutions) == 1
         solution = {varinv[v]: s for v,s in solutions[0].items()}
         return F, solution
 
+    @cached_method
+    def fractional_ideal(self, inverse=False):
+        """
+        Computes the fractional ideal corresponding to the field representation
+        of the abelian automaton `self`
+
+        Args:
+            inverse: if True, use the reciprocal_poly of chi instead
+        """
+        F, v = self.field_representation()
+        if inverse:
+            # interpret the field as Q[z] / (chi^(-1)(z))
+            F = NumberField(reciprocal_poly(F.polynomial()), 'Z')
+            v = {k: b.polynomial()(1/F('Z')) for k,b in v.items()}
+        return F, Ideal(v.values())
+
+    def is_orbit_rational(self):
+        """
+        Determines if the abelian transducer `self` is orbit rational.
+
+        Requires computation of a field representation.
+        """
+        F, _ = self.field_representation()
+        m = F.degree()
+        l = m / (2 - m % 2)
+        return (F('Z')^(4*l)).is_rational()
+
+    @cached_method
     def digraph(self):
         """
         Returns a digraph for `self`
@@ -400,6 +448,7 @@ class BinaryInvertibleTransducer(object):
                 edges[k] = {d0: '0|0', d1: '1|1'}
         return DiGraph(edges)
 
+    @cached_method
     def terminal_scc_transducers(self):
         """
         Returns the terminal strongly connected components as transducers.
@@ -462,12 +511,8 @@ class MatrixAutomaton(object):
         else:
             self.s = s
         self.max_size = max_size
-        # These are computed lazily
-        self.edges = set()
-        self.states = set()
-        self.T = None
-        self.PH = None
 
+    @cached_method
     def _traverse(self, start=None):
         """
         Traverse the transducer defined by A and r
@@ -479,47 +524,52 @@ class MatrixAutomaton(object):
         if start is None:
             start = self.s
 
-        if tuple(start) not in self.states:
-            A,r = self.A, self.r
+        A, r = self.A, self.r
 
-            # Return if we've seen this edge
-            def inn(s, c, a, b):
-                return (tuple(s), tuple(c), a, b) in self.edges
+        states = set()
+        edges = set()
 
-            # Add the edge
-            def add(s, c, a, b):
-                self.states.add(tuple(c))
-                self.edges.add((tuple(s), tuple(c), a, b))
+        # Return if we've seen this edge
+        def inn(s, c, a, b):
+            return (tuple(s), tuple(c), a, b) in edges
 
-            # DFS from the state s, adding all edges to the set
-            def dfs(s):
-                if self.max_size and len(self.states) > self.max_size:
-                    raise MachineTooLarge
+        # Add the edge
+        def add(s, c, a, b):
+            states.add(tuple(c))
+            edges.add((tuple(s), tuple(c), a, b))
 
-                e = s[0] % 2  # 0 if even, 1 if odd
-                resid0, b0 = A*s + e*r, e
-                resid1, b1 = A*s - e*r, 1-e
+        # DFS from the state s, adding all edges to the set
+        def dfs(s):
+            if self.max_size and len(states) > self.max_size:
+                raise MachineTooLarge
 
-                if inn(s, resid0, 0, b0):
-                    return
-                add(s, resid0, 0, b0)
-                add(s, resid1, 1, b1)
+            e = s[0] % 2  # 0 if even, 1 if odd
+            resid0, b0 = A*s + e*r, e
+            resid1, b1 = A*s - e*r, 1-e
 
-                dfs(resid0)
-                dfs(resid1)
+            if inn(s, resid0, 0, b0):
+                return
+            add(s, resid0, 0, b0)
+            add(s, resid1, 1, b1)
 
-            # Start from s
-            self.states.add(tuple(start))
-            dfs(start)
-        return self.edges
+            dfs(resid0)
+            dfs(resid1)
 
+        # Start from s
+        states.add(tuple(start))
+        dfs(start)
+        return edges
+
+    @cached_method
     def polyhedron(self):
-        if self.PH is None:
-            edges = map(lambda edge: edge[:2], self._traverse())
-            graph = DiGraph(edges, loops=True, multiedges=True)
-            self.PH = Polyhedron(vertices=graph.vertices())
-        return self.PH
+        """
+        Return a polyhedron in m dimensions defined by the states of `self`.
+        """
+        edges = map(lambda edge: edge[:2], self._traverse())
+        graph = DiGraph(edges, loops=True, multiedges=True)
+        return Polyhedron(vertices=graph.vertices())
 
+    @cached_method
     def transducer(self, relabeled=True, start=None):
         """
         Returns A Transducer object for A and r.
@@ -527,13 +577,8 @@ class MatrixAutomaton(object):
         """
         if start is None:
             start = self.s
-        if self.T is None or start != self.s:
-            T = Transducer(self._traverse(start=start),
-                           initial_states=[tuple(start)])
-            if start == self.s:
-                self.T = T
-        else:
-            T = self.T
+        T = Transducer(self._traverse(start=start),
+                       initial_states=[tuple(start)])
         return T.relabeled() if relabeled else T
 
     def bit(self):
