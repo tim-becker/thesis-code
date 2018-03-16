@@ -38,9 +38,20 @@ def two_odd_in_implies_even_in(T):
             if len(ed1) == 2 and ed1[0][1] and ed1[1][1]:
                 return d1
 
+def monogenic(AA):
+    T = AA.bit()
+    F, v = T.field_representation()
+    FF = NumberField(reciprocal_poly(F.polynomial()), 'Z')
+    OFF = FF.maximal_order()
+    Z = FF('Z')
+    basis = Z.powers(AA.m)
+    if OFF.basis() != basis:
+        return AA, OFF.basis()
+
 conjecture_tests = [
     one_terminal_scc,
-    two_odd_in_implies_even_in
+    two_odd_in_implies_even_in,
+    monogenic
 ]
 
 def test_conjectures_for(AA):
@@ -55,7 +66,8 @@ def test_conjectures_for(AA):
             print result
             print "="*80
 
-def test_conjectures(min_dimension=2, max_dimension=4, iterations=1000):
+def test_conjectures(min_dimension=2, max_dimension=4,
+                     max_size_for=lambda d: 200*d, iterations=1000):
     """
     Generates matrices and tests all conjectures.
 
@@ -63,6 +75,6 @@ def test_conjectures(min_dimension=2, max_dimension=4, iterations=1000):
     """
     for _ in range(iterations):
         dimension = randint(min_dimension, max_dimension)
-        AA = random_abelian_automaton(dimension, 200*dimension)
+        AA = random_abelian_automaton(dimension, max_size_for(dimension))
         print "Testing", AA
         test_conjectures_for(AA)
