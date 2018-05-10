@@ -6,40 +6,15 @@ import random
 
 load("binary_invertible_transducer.sage")
 
-def one_terminal_scc(T):
-    """
-    Checks that the transducer has only one terminal SCC
-    """
-    B = T.bit()
-    l = len(B.terminal_scc_transducers())
-    if l != 1: return l
-
-def two_odd_in_implies_even_in(T):
-    """
-    Checks that in a strongly connected component, if a state has two odd
-    parents then it also has its even parent.
-    """
-    def in_edges(T, s):
-        r = []
-        for k, ((d0, d1), t) in T.data.items():
-            if d0 == s or d1 == s:
-                r.append((k, t))
-        return r
-
-    B = T.bit()
-    for T in B.terminal_scc_transducers():
-        for k, ((d0, d1), t) in T.data.items():
-            if not t:
-                continue
-            ed0 = in_edges(T, d0)
-            ed1 = in_edges(T, d1)
-            if len(ed0) == 2 and ed0[0][1] and ed0[1][1]:
-                return d0
-            if len(ed1) == 2 and ed1[0][1] and ed1[1][1]:
-                return d1
+def in_edges(T, s):
+    r = []
+    for k, ((d0, d1), t) in T.data.items():
+        if d0 == s or d1 == s:
+            r.append((k, t))
+    return r
 
 def monogenic(AA):
-    T = AA.bit()
+    T = AA.to_bit()
     F, v = T.field_representation()
     FF = NumberField(reciprocal_poly(F.polynomial()), 'Z')
     OFF = FF.maximal_order()
@@ -48,10 +23,15 @@ def monogenic(AA):
     if OFF.basis() != basis:
         return AA, OFF.basis()
 
+def num_deltas_eq_num_gaps(AA):
+    T = AA.to_bit()
+    for Tp in T.terminal_scc_transducers():
+        if sum(1 for _ in Tp.gaps()) != sum(1 for _ in Tp.deltas()):
+            return Tp.n
+
 conjecture_tests = [
-    one_terminal_scc,
-    two_odd_in_implies_even_in,
-    monogenic
+    monogenic,
+    num_deltas_eq_num_gaps
 ]
 
 def test_conjectures_for(AA):
@@ -60,8 +40,8 @@ def test_conjectures_for(AA):
         if result is not None:
             print "="*80
             print "Counterexample found for " + test.__name__
-            print "\tMatrix:"
-            print AA.A
+            print AA
+            print repr(AA)
             print "Details:"
             print result
             print "="*80

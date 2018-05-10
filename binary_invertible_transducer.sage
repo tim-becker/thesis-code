@@ -10,6 +10,9 @@ import operator
 
 load("graph_loop.sage")
 
+fst = operator.itemgetter(0)
+snd = operator.itemgetter(1)
+
 # plot settings
 PLOT_DPI = 200
 PLOT_ITERS = 1000
@@ -29,26 +32,6 @@ def group_factor(f):
     """
     layer = ([x]*c if c > 0 else [x^(-1)]*(-c) for x,c in f.syllables())
     return [x for a in layer for x in a]
-
-def wr(f, A):
-    """
-    Compute the wreath recursion for the given word `f` in the transducer `A`
-    """
-    s = group_factor(f)
-    if len(s) == 0:
-        I = A.data.keys()[0].parent(1)
-        return (I, I), 0
-    (d0,d1),t = A.data[s[0]]
-    for x in s[1:]:
-        (xd0, xd1), xt = A.data[x]
-        if t:
-            d0 *= xd1
-            d1 *= xd0
-        else:
-            d0 *= xd0
-            d1 *= xd1
-        t = t ^^ xt
-    return (d0, d1), t
 
 class BinaryInvertibleTransducer(object):
     def __init__(self, data, convert=False):
@@ -82,8 +65,29 @@ class BinaryInvertibleTransducer(object):
         self.base_group = newdata.keys()[0].parent()
         self.data = newdata
 
+    @cached_method
     def states(self):
         return self.data.keys()
+
+    def wr(self, f):
+        """
+        Compute the wreath recursion for `f` in the transducer `self`.
+        """
+        s = group_factor(f)
+        if len(s) == 0:
+            I = self.data.keys()[0].parent(1)
+            return (I, I), 0
+        (d0,d1),t = self.data[s[0]]
+        for x in s[1:]:
+            (xd0, xd1), xt = self.data[x]
+            if t:
+                d0 *= xd1
+                d1 *= xd0
+            else:
+                d0 *= xd0
+                d1 *= xd1
+            t = t ^^ xt
+        return (d0, d1), t
 
     def transduce(self, start, bits):
         """
@@ -149,6 +153,7 @@ class BinaryInvertibleTransducer(object):
 
     @cached_method
     def _acc_trans(self):
+        g = 'g'
         acc_trans = [[g, g, i] for i in [(0,0),(0,1),(1,0),(1,1)]]
         for s, (trans, toggle) in self.data.items():
             acc_trans.append([s, trans[0], (0, int(toggle))])
@@ -162,7 +167,6 @@ class BinaryInvertibleTransducer(object):
         Computes the acceptor for a state t
         """
         assert t in self.data
-        g = 'g'
         acc_trans = self._acc_trans()
         A = Automaton(acc_trans, initial_states=[t],
                       final_states=self.states())
@@ -189,35 +193,63 @@ class BinaryInvertibleTransducer(object):
                 data[s1*s2] = ((d0, d1), toggle)
         return BinaryInvertibleTransducer(data)
 
-    def gap(self):
+    def gaps(self):
         """
-        Return the gap value of an odd state in `self`
+        Return a generator for the gap values of the odd states in `self`
         """
         for s, ((d0, d1), toggle) in self.data.items():
             if toggle:
-                return d0*d1^(-1)
+                yield d0*d1^(-1)
+
+    def deltas(self):
+        """
+        Return a generator for the deltas in `self`
+        """
+        odds = [k for k in self.data if self.data[k][1]]
+        evens = [k for k in self.data if not self.data[k][1]]
+
+        for o, e in itertools.product(odds, evens):
+            d0, d1 = self.data[o][0]
+            ed = self.data[e][0][0]
+            if ed == d0:
+                yield e / o
+            elif ed == d1:
+                yield o / e
 
     @cached_method
     def is_free_abelian(self):
         # Free abelian transducers have nontrivial gap value
-        # TODO: Optimize this function
-        if self.minimized().gap().is_one():
-            return False
-        gap_acc = None
         T = self.minimized()
-        AAi = T.product(T.inverse())
-        for s, ((d0, d1), toggle) in T.data.items():
-            if not toggle:
-                if d0 != d1:
-                    return False
-                else:
-                    continue
 
-            acc = AAi.acceptor(d0 * d1^(-1))
-            if gap_acc is None:
-                gap_acc = acc
-            elif not acc.is_equivalent(gap_acc):
+        # Check simple properties
+        for s, ((d0, d1), toggle) in T.data.items():
+            if toggle and d0 == d1:
                 return False
+            elif not toggle and d0 != d1:
+                return False
+
+        # Compute product automaton
+        AAi = T.product(T.inverse())
+
+        # minimize it
+        S = AAi.transducer().simplification()
+
+        # find the equivalence class containing a gap value
+        gap = T.gaps().next()
+        eqv_class = None
+        for s in S.states():
+            words = [v.label() for v in s.label()]
+            if gap in words:
+                eqv_class = words
+                break
+        else:
+            raise Exception("Couldn't find gap equivalence class")
+
+        # check that all other gaps as in the equivalence class
+        for gap in T.gaps():
+            if gap not in eqv_class:
+                return False
+
         return True
 
     def ball(self, k):
@@ -244,13 +276,11 @@ class BinaryInvertibleTransducer(object):
         identities = []
         for s in T.states():
             for a, b in itertools.combinations(s.label(), 2):
-                identities.append(a.label() / b.label())
+                yield a.label() / b.label()
 
         for k, ((d0, d1), t) in self.data.items():
             if d0 == d1 and d1 == k and t == 0:
-                identities.append(k)
-
-        return identities
+                yield k
 
     def estimate_group(self, max_len=6):
         """
@@ -269,24 +299,58 @@ class BinaryInvertibleTransducer(object):
         data.update(other.data)
         return BinaryInvertibleTransducer(data)
 
+    def is_equivalent(self, other):
+        """
+        Determines if `self` and `other` are equivalent Automaton
+        """
+        return self.digraph().is_isomorphic(other.digraph(), edge_labels=True)
+
     def subautomaton(self, start):
         """
         Returns the subautomaton of the complete automaton of `self` generated
         from `start`
         """
         A = self.merge(self.inverse())
+        abelian = self.is_free_abelian()
+
         # dfs from the start state
         data = {}
         def dfs(s):
             if s in data:
                 return
-            (d0, d1), t = wr(s, A)
-            data[s] = (d0, d1), t
-            dfs(d0)
-            dfs(d1)
-        dfs(start)
-        return BinaryInvertibleTransducer(data)
+            (d0, d1), t = A.wr(s)
 
+            # Optimization for abelian machines
+            if abelian and not t:
+                data[s] = (d0, d0), t
+                dfs(d0)
+            else:
+                data[s] = (d0, d1), t
+                dfs(d0)
+                dfs(d1)
+        dfs(start)
+        return BinaryInvertibleTransducer(data).minimized()
+
+    def rank(self, f):
+        """
+        Computes the rank (toggle distance) of f in the abelian group
+        """
+        assert self.is_free_abelian(), "Transducer must be abelian"
+        assert f in self.data
+        rank = 0
+        while True:
+            (d0, d1), t = self.data[f]
+            # identity
+            if d0 == d1 and d0 == f:
+                return infinity
+            elif t:
+                break
+            else:
+                f = d0
+                rank += 1
+        return rank
+
+    @cached_method
     def principal(self):
         """
         Returns the principal automaton for the abelian transducer
@@ -345,9 +409,51 @@ class BinaryInvertibleTransducer(object):
             A = A.merge(self.extend_back(s))
         return A.minimized()
 
+    def to_matrix_automaton(self):
+        """
+        Returns an equivalent matrix automaton for the abelian transducer
+        `self`.
+
+        Only works for terminal SCC transducers.
+        """
+        # check that we're terminal SCC
+        # TODO: support non-terminal SCC transducers
+        assert self.terminal_scc_transducers()[0].n == self.n
+
+        chi = T.field_representation()[0].polynomial()
+        A = _companion_matrix(chi)
+        D = T.digraph()
+
+        # Find an odd generator.
+        x = None
+        for x in T.base_group.gens():
+            if T.data[x][1]:
+                break
+
+        # Find a cycle on the generator.
+        C = D.all_simple_cycles([x])[0]
+        lookup = {(s,t): l for s,t,l in D.edges()}
+
+        # Embed x as the first standard basis vector.
+        e1 = vector([1] + [0]*(A.dimensions()[0] - 1))
+
+        # Compute the cycle equation.
+        rhs = (1 - A^(len(C) -1)) * e1
+        v = {"0|0": 0, "1|1": 0, "0|1": 1, "1|0": -1}
+        lhs = 0
+        cur = x
+        for s in C[1:]:
+            lhs = A*lhs + v[lookup[(cur,s)]]
+            cur = s
+
+        # Solve for r
+        r = lhs.inverse()*rhs
+        return MatrixAutomaton(A, r, s=e1)
+
+    @cached_method
     def transition_matrix(self):
         """
-        Return the 1/2 transition matrix for the abelian transducer `self`
+        Return the 1/2 transition matrix for the transducer `self`
         """
         states = self.states()
         M = matrix(QQ, self.n, 0)
@@ -358,6 +464,38 @@ class BinaryInvertibleTransducer(object):
             col[states.index(d1)] += 1/2
             M = M.augment(vector(col))
         return M
+
+    def word_to_vec(self, word):
+        """
+        Return the group word as a vector over Z^n.
+        Assumes `self` is abelian.
+        """
+        vec = vector([0] * self.n)
+        states = self.states()
+        for x, k in word.syllables():
+            vec[states.index(x)] += k
+        return vec
+
+    def vec_to_word(self, vec):
+        """
+        Return the group word corresponding to `vec`.
+        Assumes `self` is abelian.
+        """
+        assert len(vec) == self.n, "vector must have length {}".format(self.n)
+        factors = map(lambda (s,c): s^c, zip(T.states(), vec))
+        word = reduce(operator.mul, factors, T.base_group.one())
+        return word
+
+    def stationary_distributionn(self):
+        """
+        Return the stationary distribution of `self` interpreted as a markov
+        chain. Only guaranteed to exist if `self` is a terminal SCC.
+        """
+        s = self.states()
+        B = self.transition_matrix()
+        v = (B - 1).right_kernel().basis()[0]
+        d = dict(zip(s, v*v.denominator()))
+        return d
 
     def poly_ideal(self, z=None):
         """
@@ -399,8 +537,8 @@ class BinaryInvertibleTransducer(object):
         I, varinv = self.poly_ideal()
         T = I.triangular_decomposition()[0]
         chi = T.gens()[0].univariate_polynomial()
-        F = NumberField(chi, 'Z')
-        I, varinv = self.poly_ideal(z=F('Z'))
+        F.<Z> = NumberField(chi)
+        I, varinv = self.poly_ideal(z=Z)
         solutions = I.variety()
         assert len(solutions) == 1
         solution = {varinv[v]: s for v,s in solutions[0].items()}
@@ -432,6 +570,34 @@ class BinaryInvertibleTransducer(object):
         m = F.degree()
         l = m / (2 - m % 2)
         return (F('Z')^(4*l)).is_rational()
+
+    @cached_method
+    def compressed(self):
+        """
+        Return the compressed diagram of the abelian transducer `self`
+        """
+        assert self.is_free_abelian()
+        edges = {}
+        for k, ((d0, d1), t) in self.data.items():
+            if not t:
+                continue
+            l = 1
+            s = d0
+            while not self.data[s][1]:
+                l += 1
+                s = self.data[s][0][0]
+            edges[k] = {s : ["0 : {}".format(l)]}
+            l = 1
+            s = d1
+            while not self.data[s][1]:
+                l += 1
+                s = self.data[s][0][0]
+            if s in edges[k]:
+                edges[k][s].append("1 : {}".format(l))
+            else:
+                edges[k][s] = ["1 : {}".format(l)]
+        return DiGraph(edges)
+
 
     @cached_method
     def digraph(self):
@@ -486,6 +652,19 @@ class BinaryInvertibleTransducer(object):
         return D.graphplot(layout='spring', color_by_label=edge_colormap,
                            vertex_color='white', iterations=PLOT_ITERS,
                            vertex_labels=labeled, dpi=PLOT_DPI,
+                           figsize=[size, size]).plot()
+
+    def plot_compressed(self):
+        """
+        Plots the compressed diagram for the abelian transducer `self`
+        """
+        D = self.compressed()
+        edge_colormap = {l : ("green" if l.startswith("0") else "blue") \
+                         for l in D.edge_labels()}
+        size = max((D.num_verts() + 1) / 2, 10)
+        return D.graphplot(layout='spring', color_by_label=edge_colormap,
+                           vertex_color='white', iterations=PLOT_ITERS,
+                           edge_labels=True, dpi=PLOT_DPI,
                            figsize=[size, size]).plot()
 
     def __repr__(self):
@@ -581,7 +760,7 @@ class MatrixAutomaton(object):
                        initial_states=[tuple(start)])
         return T.relabeled() if relabeled else T
 
-    def bit(self):
+    def to_bit(self):
         """
         Returns `self` as a BinaryInvertibleTransducer type
         """
@@ -614,7 +793,10 @@ class MatrixAutomaton(object):
         return "{} given by characteristic polynomial {} and r = {}".format(
             T, A.charpoly(z), r)
 
-    __repr__ = __str__
+    def __repr__(self):
+        A, r = self.A, self.r
+        return "MatrixAutomaton(_companion_matrix({}), r=vector({}))".format(
+                A.charpoly(z), r)
 
 
 class PrincipalAutomaton(MatrixAutomaton):
@@ -765,3 +947,63 @@ def random_abelian_automaton(dimension, max_size=1000):
 
 def reciprocal_poly(p):
     return (_companion_matrix(p)^(-1)).charpoly(z)
+
+def random_binary_invertible_transducer(size):
+    states = range(size)
+    data = {}
+    for i in states:
+        d0 = randint(0, size-1)
+        d1 = randint(0, size-1)
+        t = randint(0, 1)
+        data[i] = (randint(0, size-1), randint(0, size-1)), randint(0, 1)
+    return BinaryInvertibleTransducer(data, convert=True)
+
+
+def all_simple_k_toggle_sccs(num_toggles, max_copy_chain):
+    """
+    Generator for all simple k-toggle scc transducers, with copy chains of
+    length at most `max_copy_chain`
+
+    Here, "simple", means that copy states have only one residual. Note that
+    this does not imply abelian.
+    """
+    choices = itertools.product(range(num_toggles), range(max_copy_chain + 1))
+    toggle_choices = itertools.product(choices, repeat=2)
+    base_data = {}
+    for t in range(num_toggles):
+        for l in range(1, max_copy_chain + 1):
+            base_data[(t, l)] = ((t, l - 1), (t, l - 1)), 0
+
+    for dts in itertools.product(toggle_choices, repeat=num_toggles):
+        data = copy(base_data)
+        for t in range(num_toggles):
+            data[(t, 0)] = dts[t], 1
+        T = BinaryInvertibleTransducer(data, convert=True).minimized()
+        T = T.terminal_scc_transducers()[0]
+        if sum(t for _, t in T.data.values()) == num_toggles:
+            yield T
+
+def all_abelian_sccs(num_toggles, max_copy_chain):
+    """
+    Return all abelian k-toggle scc transducers, with copy chains
+    of length at most `max_copy_chain`.
+    """
+    unique = []
+    def is_unique(T):
+        for Tp in unique:
+            if Tp.is_equivalent(T):
+                return False
+        unique.append(T)
+        return True
+    is_abelian = lambda T: T.is_free_abelian()
+
+    filt = lambda T: is_abelian(T) and is_unique(T)
+    return filter(filt, all_simple_k_toggle_sccs(num_toggles, max_copy_chain))
+
+Grigorchuk = BinaryInvertibleTransducer({
+    'a': (('e', 'e'), 1),
+    'b': (('a', 'c'), 0),
+    'c': (('a', 'd'), 0),
+    'd': (('b', 'e'), 0),
+    'e': (('e', 'e'), 0)
+}, convert=True)
