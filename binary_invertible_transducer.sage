@@ -545,7 +545,7 @@ class BinaryInvertibleTransducer(object):
         return F, solution
 
     @cached_method
-    def fractional_ideal(self, inverse=False):
+    def fractional_ideal(self, inverse=True):
         """
         Computes the fractional ideal corresponding to the field representation
         of the abelian automaton `self`
