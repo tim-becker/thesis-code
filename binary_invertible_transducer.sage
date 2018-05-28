@@ -526,6 +526,17 @@ class BinaryInvertibleTransducer(object):
         return Ideal(polys), varinv
 
     @cached_method
+    def charpoly(self):
+        """
+        Compute the charpoly for the abelian transducer `self`.
+        This is the definning polynomial for the field field_representation.
+        """
+        I, varinv = self.poly_ideal()
+        J = I.elimination_ideal(varinv.keys())
+        chi = J.gens()[0].univariate_polynomial()
+        return chi.monic()
+
+    @cached_method
     def field_representation(self):
         """
         Computes the representation of an abelian transducer as elements over
@@ -534,9 +545,7 @@ class BinaryInvertibleTransducer(object):
         Returns a tuple (F, S) where F is the base field and S is a dictionary
         mapping self.states() to elements of F
         """
-        I, varinv = self.poly_ideal()
-        T = I.triangular_decomposition()[0]
-        chi = T.gens()[0].univariate_polynomial()
+        chi = self.charpoly()
         F.<Z> = NumberField(chi)
         I, varinv = self.poly_ideal(z=Z)
         solutions = I.variety()
