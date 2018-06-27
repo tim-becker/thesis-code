@@ -832,7 +832,7 @@ class PrincipalAutomaton(MatrixAutomaton):
             raise InvalidMatrix("A.charpoly() not irreducible")
         if not all([a[0].abs() < 1.0 for a in cp.roots(ring=QQbar)]):
             raise InvalidMatrix("A not contracting")
-        super(PrincipalAutomaton, self).__init__(A, A.columns()[0])
+        super(PrincipalAutomaton, self).__init__(A, A.parent(1).columns()[0])
         F.<Z> = NumberField(A.charpoly(z))
         self.F = F
 
@@ -949,14 +949,14 @@ def random_principal_automaton(dimension):
     AA = PrincipalAutomaton(A)
     return AA
 
-def random_abelian_automaton(dimension, max_size=1000):
+def random_abelian_automaton_with_matrix(A, max_size=1000):
     """
-    Generates a random abelian matrix automaton.
+    Generates a random abelian matrix automaton with the given matrix.
     Max number of states and be controlled with the `max_size` argument, and
     the default value is 1000.
     """
+    dimension = A.dimensions()[0]
     while True:
-        A = random_transition_matrix(dimension)
         r = random_vector(dimension, -dimension-1, dimension+1)
         # make v[0] odd
         r[0] = r[0] * 2 + 1
@@ -966,6 +966,15 @@ def random_abelian_automaton(dimension, max_size=1000):
             return T
         except MachineTooLarge:
             pass
+
+def random_abelian_automaton(dimension, A=None, max_size=1000):
+    """
+    Generates a random abelian matrix automaton.
+    Max number of states and be controlled with the `max_size` argument, and
+    the default value is 1000.
+    """
+    A = random_transition_matrix(dimension)
+    return random_abelian_automaton_with_matrix(A, max_size=max_size)
 
 def reciprocal_poly(p):
     return (_companion_matrix(p)^(-1)).charpoly(z)
