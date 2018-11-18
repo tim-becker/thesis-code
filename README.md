@@ -1,4 +1,4 @@
-Representations and Complexity of Abelian Automaton Groups
+Embeddings and Orbits of Abelian Automaton Groups
 ==========================================================
 
 This repository implements code used in my senior thesis. Note that it will be
